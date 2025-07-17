@@ -149,7 +149,7 @@ def load_gemini2_lm():
     dspy.settings.configure(lm=gemini, max_tokens=10000, top_k=5)
 
 def load_gemini2_5_lm():
-     gemini = dspy.Google("models/gemini-2.0-flash-lite-001", api_key=GEMINI_API_KEY)
+     gemini = dspy.Google("models/gemini-2.5-flash", api_key=GEMINI_API_KEY)
      dspy.settings.configure(lm=gemini, max_tokens=10000, top_k=5)
 
 def load_gemini_vertexai_lm():
