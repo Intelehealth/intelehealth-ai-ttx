@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "intelehealth-ai-models"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+package-mode = false
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4.0"
+
+dspy="2.5.39"
+google-generativeai="0.8.3"
+poetry-dotenv = "^0.4.0"
+uvicorn = "^0.34.0"
+requests = "^2.32.3"
+mlflow = "^3.1.1"
+pymysql = "^1.1.1"
+fastapi = "^0.111.0"
+pydantic = "^2.7.1"
+groq = "^0.30.0"
