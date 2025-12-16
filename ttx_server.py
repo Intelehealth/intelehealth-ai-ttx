@@ -1,7 +1,7 @@
 import dspy
 import time
 import json
-from utils.metric_utils import load_gemini_lm_prod, load_open_ai_lm, load_gemini_lm, load_gemini2_lm, load_gemini2_5_lm
+from utils.ttx_utils import load_gemini2_5_lm, load_groq_llama_4_maverick
 from dotenv import load_dotenv
 from modules.TTxModule import TTxModule
 from modules.TTxv2Module import TTxv2Module
@@ -13,13 +13,14 @@ import os
 import logging
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
-from prompt_config import prompt_config
 from ttx_client import process_medications
 import mlflow
 import re
 from fastapi.responses import JSONResponse
+from groq import RateLimitError, APIError, APIConnectionError
+from google.api_core import exceptions as google_exceptions
 
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -91,30 +92,96 @@ load_dotenv(
 
 # MLflow setup for tracking DSPy calls
 logger.info("Setting up MLflow for DSPy tracking...")
-# Set tracking URI to MySQL database backend
-# URL-encode the password to handle special characters like @
-# mlflow.set_tracking_uri("mysql+pymysql://mluser:noidea#2@0.0.0.0:3306/mlflow_db")
-# mlflow.set_experiment("ttx-server-tracking")
-# mlflow.dspy.autolog(
-#     log_traces=True,
-#     log_traces_from_compile=True,
-#     log_traces_from_eval=True,
-#     log_compiles=True,
-#     log_evals=True,
-#     silent=False
-#)
-logger.info("MLflow DSPy autologging configured successfully!")
+
+# Check environment to determine which tracking backend to use
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
+ENVIRONMENT = os.getenv("ENVIRONMENT", "local")  # default to local
+
+if MLFLOW_TRACKING_URI:
+    # Use explicitly configured tracking URI
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    logger.info(f"MLflow tracking URI set to: {MLFLOW_TRACKING_URI}")
+elif ENVIRONMENT == "production":
+    # Production: Use MySQL backend
+    MYSQL_USER = os.getenv("MYSQL_USER", "mluser")
+    MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
+    MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+    MYSQL_PORT = os.getenv("MYSQL_PORT", "3306")
+    MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "mlflow_db")
+
+    if MYSQL_PASSWORD:
+        # URL-encode the password to handle special characters
+        from urllib.parse import quote_plus
+        encoded_password = quote_plus(MYSQL_PASSWORD)
+        tracking_uri = f"mysql+pymysql://{MYSQL_USER}:{encoded_password}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}"
+        mlflow.set_tracking_uri(tracking_uri)
+        logger.info(f"MLflow configured with MySQL backend at {MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}")
+    else:
+        logger.warning("MYSQL_PASSWORD not set. Falling back to SQLite.")
+        mlflow.set_tracking_uri("sqlite:///mlflow.db")
+        logger.info("MLflow configured with SQLite backend (local)")
+else:
+    # Local/Development: Use SQLite file-based backend
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
+    logger.info("MLflow configured with SQLite backend (local)")
+
+# Set experiment name
+mlflow.set_experiment("ttx-server-tracking")
+
+# Optional: Enable DSPy autologging (can be controlled via env var)
+ENABLE_MLFLOW_AUTOLOG = os.getenv("ENABLE_MLFLOW_AUTOLOG", "false").lower() == "true"
+if ENABLE_MLFLOW_AUTOLOG:
+    mlflow.dspy.autolog(
+        log_traces=True,
+        log_traces_from_compile=True,
+        log_traces_from_eval=True,
+        log_compiles=True,
+        log_evals=True,
+        silent=False
+    )
+    logger.info("MLflow DSPy autologging enabled")
+
+logger.info("MLflow setup completed successfully!")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+else:
+    logger.warning("GEMINI_API_KEY not found. Gemini models will not be available.")
 
 
-async def transform_ttx_output(llm_output: dict) -> dict:
-    """Transform the TTx LLM output into a structured format using an LLM.
-    
+def filter_response_fields(response: dict, fields: list[str] | None) -> dict:
+    """Filter response to include only specified fields.
+
     Args:
-        llm_output (dspy.Prediction): The raw output from the TTx model
-        
+        response (dict): The full response dictionary
+        fields (list[str] | None): List of field names to include. If None, returns all fields.
+
+    Returns:
+        dict: Filtered response containing only the requested fields
+    """
+    if fields is None:
+        return response
+
+    # Always include 'success' and 'error' fields for proper error handling
+    base_fields = {'success', 'error'}
+    requested_fields = set(fields) | base_fields
+
+    # Filter the response to only include requested fields
+    filtered = {key: value for key, value in response.items() if key in requested_fields}
+
+    return filtered
+
+
+async def transform_ttx_output(llm_output: dict, transformation_model: str = "groq-llama") -> dict:
+    """Transform the TTx LLM output into a structured format using an LLM.
+
+    Args:
+        llm_output (dict): The raw output from the TTx model
+        transformation_model (str): The LLM to use for transformation. Options:
+            - "groq-llama": Use Groq with Llama model (default)
+            - "gemini-2.5-flash": Use Google Gemini 2.5 Flash
+
     Returns:
         dict: A structured response with the following format:
         {
@@ -252,76 +319,138 @@ async def transform_ttx_output(llm_output: dict) -> dict:
 7.  If the input indicates insufficient information, set `success` to `false` and provide an error message in the `error` field for insufficient information.
 """
 
-    if not groq_client:
-        logger.error("GROQ_API_KEY not found. Cannot use Groq for transformation.")
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured.")
-
     try:
         print(transform_prompt)
-        chat_completion = await groq_client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that transforms medical LLM output into a structured JSON format. Your output must be only the JSON object, without any markdown formatting like ```json or any other explanatory text."
-                },
-                {
-                    "role": "user",
-                    "content": transform_prompt,
-                }
-            ],
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        response_text = chat_completion.choices[0].message.content
+        response_text = None
+
+        # Select transformation model
+        if transformation_model == "groq-llama":
+            if not groq_client:
+                logger.error("GROQ_API_KEY not found. Cannot use Groq for transformation.")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Groq transformation service not configured."
+                )
+
+            try:
+                chat_completion = await groq_client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that transforms medical LLM output into a structured JSON format. Your output must be only the JSON object, without any markdown formatting like ```json or any other explanatory text."
+                        },
+                        {
+                            "role": "user",
+                            "content": transform_prompt,
+                        }
+                    ],
+                    model="meta-llama/llama-4-scout-17b-16e-instruct",
+                    temperature=0.0,
+                    response_format={"type": "json_object"},
+                )
+                response_text = chat_completion.choices[0].message.content
+
+            except RateLimitError as e:
+                logger.error(f"Groq rate limit exceeded: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Transformation service rate limit exceeded. Please try again later."
+                )
+            except (APIConnectionError, APIError) as e:
+                logger.error(f"Groq API error: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Transformation service temporarily unavailable. Please try again later."
+                )
+
+        elif transformation_model == "gemini-2.5-flash":
+            if not genai.get_api_key():
+                logger.error("GEMINI_API_KEY not found. Cannot use Gemini for transformation.")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Gemini transformation service not configured."
+                )
+
+            try:
+                model_name = f"models/{transformation_model}"
+                response = genai.models.generate_content(
+                    model=model_name,
+                    contents=transform_prompt,
+                )
+                response_text = response.text
+
+                # Extract JSON from markdown if present
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```|({[\s\S]*})', response_text)
+                if json_match:
+                    response_text = json_match.group(1) or json_match.group(2)
+                    response_text = response_text.strip()
+
+            except google_exceptions.ResourceExhausted as e:
+                logger.error(f"Gemini quota exceeded: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Gemini API quota exceeded. Please try again later."
+                )
+            except google_exceptions.ServiceUnavailable as e:
+                logger.error(f"Gemini service unavailable: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Gemini service temporarily unavailable. Please try again later."
+                )
+            except google_exceptions.InvalidArgument as e:
+                logger.error(f"Invalid request to Gemini: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid request format for transformation."
+                )
+            except Exception as e:
+                logger.error(f"Gemini API error: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Gemini transformation service error. Please try again later."
+                )
+        else:
+            logger.error(f"Invalid transformation model: {transformation_model}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid transformation_model: {transformation_model}. Supported models: groq-llama, gemini-2.5-flash"
+            )
 
         print(" transformation response ")
         print(response_text)
-        
-        # Log the transformation request to MLflow (if enabled)
-        # if not MLFLOW_DISABLED:
-        #     mlflow.log_param("transformation_model", "meta-llama/llama-4-scout-17b-16e-instruct")
-        #     mlflow.log_param("transformation_prompt_length", len(transform_prompt))
-            
-        #     # Log the transformation prompt as an artifact
-        #     mlflow.log_text(transform_prompt, "transformation_prompt.txt")
-        #     mlflow.log_text(str(response_text), "raw_transformation_response.txt")
-            
-        #     # Log transformation success metric
-        #     mlflow.log_metric("transformation_success", 1)
+
         logger.info("Transformation response: -----")
         logger.info(response_text)
         logger.info("-----")
-        
-        # Parse the JSON response directly since Groq returns JSON format
+
+        # Parse the JSON response
         transformed = json.loads(response_text)
-        
-        # Ensure medical_advice and adverse_effects are always arrays
+
+        # Ensure medical_advice is always an array
         if "medical_advice" not in transformed or not isinstance(transformed["medical_advice"], list):
             transformed["medical_advice"] = []
-        # if "adverse_effects" not in transformed or not isinstance(transformed["adverse_effects"], list):
-        #     transformed["adverse_effects"] = []
-            
+
         # Handle empty or null medical_advice
         if transformed["medical_advice"] is None or transformed["medical_advice"] == "":
             transformed["medical_advice"] = []
-        
-        # Ensure medical_advice maintains the correct format with numbered keys
-        # The format should be an array containing a single object with numbered keys
-            
+
         return transformed
+
+    except HTTPException:
+        # Re-raise HTTPExceptions as-is
+        raise
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse transformation response as JSON: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Invalid response format from transformation service."
+        )
     except Exception as e:
-        logger.error(f"Error transforming TTx output: {e}")
-        # Fallback to a basic error response if transformation fails
-        return {
-            "success": False,
-            "medications": [],
-            "medical_advice": [],
-            "tests_to_be_done": [],
-            "follow_up": [],
-            "referral": [],
-            "error": "Error processing treatment recommendations. Please try again."
-        }
+        logger.error(f"Unexpected error in transformation: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error processing treatment recommendations. Please try again."
+        )
 
 async def transform_ttx_output_old(llm_output: dict) -> dict:
     """Transform the TTx LLM output into a structured format using an LLM.
@@ -512,8 +641,6 @@ Do not include any other text, explanations, or markdown formatting like ````jso
             "error": "Error processing treatment recommendations. Please try again."
         }
 
-load_gemini2_lm()
-
 app = FastAPI(
     title="Treatment Recommendation Server",
     description="A simple API serving a DSPy Chain of Thought program for TTx",
@@ -523,8 +650,10 @@ app = FastAPI(
 class BaseTTxRequest(BaseModel):
     case: str
     diagnosis: str
-    model_name: str
+    model_name: str  # Main LLM for TTx prediction (e.g., "gemini-2.0-flash", "gemini-2.5-flash")
     tracker: str
+    response_fields: list[str] | None = None  # Optional list of fields to include in response
+    transformation_model: str | None = "groq-llama"  # LLM for response transformation (e.g., "groq-llama", "gemini-2.5-flash")
 
 
 @app.post("/ttx/v1")
@@ -551,15 +680,34 @@ async def ttx_v1(request_body: BaseTTxRequest):
         mlflow.log_text(request_body.case, "input_case.txt")
         mlflow.log_text(request_body.diagnosis, "input_diagnosis.txt")
 
+        # Dynamically load the appropriate LLM and module based on model_name
         cot = None
-        if request_body.model_name == "gemini-2.0-flash":
-            cot = TTxv2Module()
-            cot.load("outputs/" + "24_04_2025_12_11_ttx_v2_gemini_cot_nas_v2_combined_llm_judge.json")
-        elif request_body.model_name == "gemini-2.5-flash":
-            cot = TTxv3Module()
-            cot.load("outputs/" + "30_05_2025_13_44_ttx_v3_gemini2_5_cot_nas_v2_combined_medications_referral_tests_followup.json")
-        else:
-            raise HTTPException(status_code=400, detail="Invalid model name for TTx v2")
+        try:
+            if request_body.model_name == "gemini-2.5-flash":
+                load_gemini2_5_lm()  # Configure DSPy to use Gemini 2.5
+                cot = TTxv3Module()
+                cot.load("artifacts/models/30_05_2025_13_44_ttx_v3_gemini2_5_cot_nas_v2_combined_medications_referral_tests_followup.json")
+            elif request_body.model_name == "llama-4-maverick":
+                load_groq_llama_4_maverick()  # Configure DSPy to use Groq Llama 4 Maverick
+                cot = TTxv3Module()
+                cot.load("artifacts/models/25_08_2025_16_45_ttx_v3_groq_llama_4_maverick_17b_128e_instruct_cot_nas_v2_combined_medications_referral_tests_followup.json")
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid model_name: {request_body.model_name}. Supported models: gemini-2.5-flash, llama-4-maverick"
+                )
+        except FileNotFoundError as e:
+            logger.error(f"Model weights file not found: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Model configuration files not found. Please contact support."
+            )
+        except Exception as e:
+            logger.error(f"Error loading model: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error loading prediction model. Please try again later."
+            )
 
         dspy_program = dspy.asyncify(cot)
 
@@ -567,13 +715,41 @@ async def ttx_v1(request_body: BaseTTxRequest):
             logger.info("About to call DSPy program for TTx...", extra=log_extra)
 
             dspy_start_time = time.time()
-            result = await dspy_program(case=request_body.case, diagnosis=request_body.diagnosis)
+            try:
+                result = await dspy_program(case=request_body.case, diagnosis=request_body.diagnosis)
+            except google_exceptions.ResourceExhausted as e:
+                logger.error(f"Gemini API quota exceeded during prediction: {e}", extra=log_extra)
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="API quota exceeded. Please try again later."
+                )
+            except google_exceptions.ServiceUnavailable as e:
+                logger.error(f"Gemini service unavailable during prediction: {e}", extra=log_extra)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Prediction service temporarily unavailable. Please try again later."
+                )
+            except google_exceptions.InvalidArgument as e:
+                logger.error(f"Invalid input to Gemini API: {e}", extra=log_extra)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid input format. Please check your case and diagnosis."
+                )
+            except Exception as e:
+                import traceback
+                logger.error(f"Unexpected error during DSPy prediction: {e}", extra=log_extra)
+                logger.error(f"Full traceback: {traceback.format_exc()}", extra=log_extra)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Error generating treatment recommendations. Please try again later."
+                )
+
             dspy_latency = time.time() - dspy_start_time
-            
+
             log_extra['extra_data']['dspy_latency'] = dspy_latency
             logger.info(f"DSPy program for TTx completed in {dspy_latency:.2f} seconds", extra=log_extra)
             mlflow.log_metric("dspy_latency", dspy_latency)
-            
+
             # Log the raw result
             mlflow.log_text(str(result), "raw_dspy_output.txt")
 
@@ -588,18 +764,29 @@ async def ttx_v1(request_body: BaseTTxRequest):
             
             transform_start_time = time.time()
             print(result.toDict())
-            transformed_output = await transform_ttx_output(result.output.toDict())
+            transformed_output = await transform_ttx_output(
+                result.output.toDict(),
+                transformation_model=request_body.transformation_model
+            )
             transform_latency = time.time() - transform_start_time
             log_extra['extra_data']['transformation_latency'] = transform_latency
             logger.info(f"TTx transformation completed in {transform_latency:.2f} seconds", extra=log_extra)
             mlflow.log_metric("transformation_latency", transform_latency)
-            
+
             # Log the transformed output
             mlflow.log_text(json.dumps(transformed_output, indent=2), "transformed_output.json")
-            
+
+            # Apply field filtering if requested
+            filtered_output = filter_response_fields(transformed_output, request_body.response_fields)
+
+            # Log the filtered fields if applicable
+            if request_body.response_fields:
+                mlflow.log_param("response_fields_requested", ",".join(request_body.response_fields))
+                mlflow.log_text(json.dumps(filtered_output, indent=2), "filtered_output.json")
+
             response_data = {
                 "status": "success",
-                "data": transformed_output
+                "data": filtered_output
             }
             
             # Log final response

@@ -225,16 +225,19 @@ def process_medications(medication_text):
     
     return medications
 
-def get_treatment_recommendations_v1(patient_case, diagnosis, api_url="http://127.0.0.1:8000/ttx/v1", model="gemini-2.5-flash"):
+def get_treatment_recommendations_v1(patient_case, diagnosis, api_url="http://127.0.0.1:8000/ttx/v1", model="gemini-2.5-flash", response_fields=None):
     """
     Get treatment recommendations from the TTX API v1
-    
+
     Args:
         patient_case (str): Patient case description
         diagnosis (str): Diagnosis for the patient
         api_url (str): URL for the TTX API v1
         model (str): Model name to use for recommendations
-        
+        response_fields (list[str], optional): List of specific fields to include in response.
+            Available fields: medications, medical_advice, tests_to_be_done, follow_up, referral
+            If None, returns all fields.
+
     Returns:
         dict: Dictionary with keys:
             - success (bool): Whether the API call succeeded
@@ -242,9 +245,20 @@ def get_treatment_recommendations_v1(patient_case, diagnosis, api_url="http://12
             - error (str, optional): Error message if the call failed
     """
     try:
+        payload = {
+            "model_name": model,
+            "case": patient_case,
+            "diagnosis": diagnosis,
+            "tracker": "test"
+        }
+
+        # Add response_fields if specified
+        if response_fields is not None:
+            payload["response_fields"] = response_fields
+
         response = requests.post(
             api_url,
-            json={"model_name": model, "case": patient_case, "diagnosis": diagnosis, "tracker": "test"}
+            json=payload
         )
         
         if response.status_code == 200:
@@ -484,26 +498,41 @@ if __name__ == "__main__":
     """
     
     diagnosis = "Acute Pharyngitis"
-    
-    # Get recommendations from v1
-    print("Getting treatment recommendations from v1...")
+
+    # Get recommendations from v1 with all fields (default)
+    print("Getting treatment recommendations from v1 (all fields)...")
     result_v1 = get_treatment_recommendations_v1(patient_test_case, diagnosis)
-    
+
     print("--------------------------------")
     print(result_v1)
     print("--------------------------------")
-    # # Get recommendations from v2
-    # print("\nGetting treatment recommendations from v2...")
-    # result_v2 = get_treatment_recommendations_v2(patient_test_case, diagnosis)
-    
+
     # Print v1 results
     if result_v1 and result_v1.get("success"):
-        print("\nV1 Results:")
+        print("\nV1 Results (All Fields):")
         print(json.dumps(result_v1.get("data", {}), indent=2))
     elif result_v1:
         print(f"\nV1 Error: {result_v1.get('error', 'Unknown error')}")
     else:
         print("\nV1 Error: Received no response from the server.")
+
+    # Get recommendations from v1 with only medications and medical_advice
+    print("\n\n========================================")
+    print("Getting treatment recommendations from v1 (filtered: medications and medical_advice only)...")
+    result_v1_filtered = get_treatment_recommendations_v1(
+        patient_test_case,
+        diagnosis,
+        response_fields=["medications", "medical_advice"]
+    )
+
+    # Print v1 filtered results
+    if result_v1_filtered and result_v1_filtered.get("success"):
+        print("\nV1 Results (Filtered - medications and medical_advice only):")
+        print(json.dumps(result_v1_filtered.get("data", {}), indent=2))
+    elif result_v1_filtered:
+        print(f"\nV1 Filtered Error: {result_v1_filtered.get('error', 'Unknown error')}")
+    else:
+        print("\nV1 Filtered Error: Received no response from the server.")
     
     # Print v2 results
     # if result_v2["success"]:

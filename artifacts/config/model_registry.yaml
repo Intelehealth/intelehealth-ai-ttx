@@ -1,0 +1,38 @@
+# Model Registry Configuration
+# Central registry for all treatment recommendation models
+
+models:
+  gemini-2.5-flash:
+    module: TTxv3Module
+    weights: artifacts/models/30_05_2025_13_44_ttx_v3_gemini2_5_cot_nas_v2_combined_medications_referral_tests_followup.json
+    lm_loader: load_gemini2_5_lm
+    description: "Google Gemini 2.5 Flash model for treatment recommendations"
+    version: "v3"
+
+  llama-4-maverick:
+    module: TTxv3Module
+    weights: artifacts/models/25_08_2025_16_45_ttx_v3_groq_llama_4_maverick_17b_128e_instruct_cot_nas_v2_combined_medications_referral_tests_followup.json
+    lm_loader: load_groq_llama_4_maverick
+    description: "Groq Llama 4 Maverick 17B model for treatment recommendations"
+    version: "v3"
+
+transformation_models:
+  groq-llama:
+    model_id: meta-llama/llama-4-scout-17b-16e-instruct
+    provider: groq
+    lm_loader: load_groq_llama_scout
+    description: "Groq Llama 4 Scout for structured response transformation"
+
+  gemini-2.5-flash:
+    model_id: models/gemini-2.5-flash
+    provider: google
+    lm_loader: load_gemini2_5_lm
+    description: "Google Gemini 2.5 Flash for response transformation"
+
+# Supported response fields for filtering
+response_fields:
+  - medications
+  - medical_advice
+  - tests_to_be_done
+  - follow_up
+  - referral

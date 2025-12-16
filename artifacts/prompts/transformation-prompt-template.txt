@@ -1,0 +1,61 @@
+Transformation Prompt Template
+
+PURPOSE:
+Transform unstructured LLM output from treatment recommendations into a standardized JSON structure.
+
+TRANSFORMATION TASK:
+Convert the following fields from raw text to structured JSON:
+- Medication recommendations → medications array
+- Medical advice → medical_advice array
+- Tests to be done → tests_to_be_done array
+- Follow up information → follow_up array
+- Referral information → referral array
+
+OUTPUT STRUCTURE:
+{
+    "success": boolean,
+    "medications": [
+        {
+            "name": "medication in route-form-strength format",
+            "dosage": "dosage information",
+            "frequency": "frequency of administration",
+            "duration": "duration number as string",
+            "duration_unit": "days/weeks/months",
+            "instructions": "timing and food instructions",
+            "confidence": "high/moderate/low"
+        }
+    ],
+    "medical_advice": ["advice string 1", "advice string 2"],
+    "tests_to_be_done": [
+        {
+            "test_name": "test name",
+            "test_reason": "rationale for test"
+        }
+    ],
+    "follow_up": [
+        {
+            "follow_up_required": boolean,
+            "follow_up_duration": "number with unit",
+            "reason_for_follow_up": "rationale"
+        }
+    ],
+    "referral": [
+        {
+            "referral_required": boolean,
+            "referral_to": "specialist/doctor type",
+            "referral_facility": "facility type",
+            "remark": "rationale for referral"
+        }
+    ],
+    "error": "error message if success is false"
+}
+
+TRANSFORMATION RULES:
+1. success: true if valid medications found, otherwise false
+2. medications.name: Format as "MedicationName Strength Route Form"
+3. medical_advice: MUST be array of strings, empty array [] if none
+4. duration: Use empty string "" if not applicable
+5. duration_unit: Use empty string "" if not applicable
+6. follow_up_required/referral_required: Must be boolean
+7. Empty/null inputs: Return empty array []
+8. Insufficient information: Set success=false with error message
