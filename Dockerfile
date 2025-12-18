@@ -8,10 +8,10 @@ WORKDIR /app
 
 # Copy dependency files
 COPY pyproject.toml ./
-COPY uv.lock* ./
+#COPY uv.lock* ./
 
 # Sync dependencies (creates .venv by default)
-RUN uv sync --frozen --no-dev
+RUN uv sync  --no-dev
 
 # Final stage
 FROM python:3.11-slim
