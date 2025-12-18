@@ -52,6 +52,7 @@ jobs:
             --name ttx \
             --restart unless-stopped \
             -p 8000:8000 \
+            --env-file /home/ubuntu/deploy/ttx/.env \
             ttx:latest
           
           # Clean up the tar file
