@@ -8,6 +8,7 @@ WORKDIR /app
 
 # Copy dependency files
 COPY pyproject.toml ./
+COPY README.md ./
 #COPY uv.lock* ./
 
 # Sync dependencies (creates .venv by default)
@@ -32,4 +33,4 @@ EXPOSE 8000
 
 
 # Optional: For production with multiple workers
- CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+ CMD ["python", "-m", "uvicorn", "ttx_server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
