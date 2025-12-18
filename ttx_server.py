@@ -3,8 +3,6 @@ import time
 import json
 from utils.ttx_utils import load_gemini2_5_lm, load_groq_llama_4_maverick
 from dotenv import load_dotenv
-from modules.TTxModule import TTxModule
-from modules.TTxv2Module import TTxv2Module
 from modules.TTxv3Module import TTxv3Module
 import google.generativeai as genai
 from groq import AsyncGroq
