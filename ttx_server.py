@@ -47,8 +47,7 @@ class CustomLogger:
             self.logger.handlers.clear()
 
         log_dir = 'logs'
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
+        os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, log_file)
 
         file_handler = RotatingFileHandler(log_path, maxBytes=max_bytes, backupCount=backup_count)
