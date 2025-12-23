@@ -51,7 +51,7 @@ jobs:
           docker run -d \
             --name ttx \
             --restart unless-stopped \
-            -p 8000:8000 \
+            -p 5051:5051 \
             -v /home/ubuntu/deploy/ttx/ops.env:/app/ops/.env:ro \
             --env-file /home/ubuntu/deploy/ttx/.env \
             ttx:latest
