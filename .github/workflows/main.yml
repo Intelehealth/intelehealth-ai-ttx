@@ -51,8 +51,8 @@ jobs:
           docker run -d \
             --name ttx \
             --restart unless-stopped \
-            -p 5051:5051 \
-            --env-file /home/ubuntu/deploy/ttx/.env \
+            -p 5051:5051 \               
+            -v /home/ubuntu/deploy/ddx/.env:/app/.env \
             ttx:latest
           
           # Clean up the tar file
