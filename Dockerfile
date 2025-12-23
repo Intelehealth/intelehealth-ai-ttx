@@ -31,8 +31,8 @@ RUN mkdir -p ops
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Expose port for FastAPI
-EXPOSE 8000
+EXPOSE 5051
 
 
 # Optional: For production with multiple workers
- CMD ["python", "-m", "uvicorn", "ttx_server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+ CMD ["python", "-m", "uvicorn", "ttx_server:app", "--host", "0.0.0.0", "--port", "5051", "--workers", "4"]
