@@ -84,7 +84,7 @@ class CustomLogger:
 logger = CustomLogger()
 
 load_dotenv(
-    "ops/.env"
+    ".env"
 )
 
 # MLflow setup for tracking DSPy calls
