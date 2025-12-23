@@ -52,7 +52,6 @@ jobs:
             --name ttx \
             --restart unless-stopped \
             -p 5051:5051 \
-            -v /home/ubuntu/deploy/ttx/ops.env:/app/ops/.env:ro \
             --env-file /home/ubuntu/deploy/ttx/.env \
             ttx:latest
           
