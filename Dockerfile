@@ -25,6 +25,8 @@ COPY --from=builder /app/.venv /app/.venv
 # Copy application code
 COPY . .
 
+RUN mkdir -p ops
+
 # Add virtual environment to PATH
 ENV PATH="/app/.venv/bin:$PATH"
 
