@@ -15,7 +15,7 @@ jobs:
     
     - name: Build Docker image
       run: |
-        docker build -t ttx:${{ github.sha }} .
+        docker build --no-cache -t ttx:${{ github.sha }} .
         docker tag ttx:${{ github.sha }} ttx:latest
     
     - name: Save Docker image to tar
