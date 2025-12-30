@@ -125,7 +125,7 @@ else:
 # Set experiment name with artifact location
 # Use environment variable for artifact root, default to /app/mlruns for Docker
 ARTIFACT_ROOT = os.getenv("MLFLOW_ARTIFACT_ROOT", "/app/mlruns")
-EXPERIMENT_NAME = "ttx-server-docker" if ENVIRONMENT == "local" else "ttx-server-tracking"
+EXPERIMENT_NAME = "tx-mlflow-docker" if ENVIRONMENT == "local" else "tx-mlflow-docker"
 
 try:
     # Try to create/get experiment with specified artifact location
