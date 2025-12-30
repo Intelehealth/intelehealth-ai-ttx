@@ -53,7 +53,7 @@ jobs:
             --name ttx \
             --restart unless-stopped \
             --network "$NETWORK" \
-             -v /home/ubuntu/deploy/ddx/.env:/app/.env \
+             -v /home/ubuntu/deploy/ttx/.env:/app/.env \
             -p 5051:5051 \ 
             ttx:latest
           
