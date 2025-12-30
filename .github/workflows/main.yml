@@ -46,8 +46,7 @@ jobs:
           # Stop and remove old container if it exists
           docker stop ttx || true
           docker rm ttx || true
-          NETWORK=$(docker inspect medical-ai-api \
-                      --format='{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}') 
+          NETWORK=$(docker inspect medical-ai-api --format='{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}') 
           # Run the new container
           docker run -d \
             --name ttx \
