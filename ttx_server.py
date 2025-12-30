@@ -1,13 +1,17 @@
 import dspy
 import time
 import json
-from utils.ttx_utils import load_gemini2_5_lm, load_groq_llama_4_maverick
+import os
 from dotenv import load_dotenv
+
+# Load environment variables BEFORE importing modules that need them
+load_dotenv(".env")
+
+from utils.ttx_utils import load_gemini2_5_lm, load_groq_llama_4_maverick
 from modules.TTxv3Module import TTxv3Module
 import google.generativeai as genai
 from groq import AsyncGroq
 
-import os
 import logging
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -83,10 +87,6 @@ class CustomLogger:
 
 logger = CustomLogger()
 
-load_dotenv(
-    ".env"
-)
-
 # MLflow setup for tracking DSPy calls
 logger.info("Setting up MLflow for DSPy tracking...")
 
@@ -122,8 +122,27 @@ else:
     mlflow.set_tracking_uri("sqlite:///mlflow.db")
     logger.info("MLflow configured with SQLite backend (local)")
 
-# Set experiment name
-mlflow.set_experiment("ttx-server-tracking")
+# Set experiment name with artifact location
+# Use environment variable for artifact root, default to /app/mlruns for Docker
+ARTIFACT_ROOT = os.getenv("MLFLOW_ARTIFACT_ROOT", "/app/mlruns")
+EXPERIMENT_NAME = "ttx-server-docker" if ENVIRONMENT == "local" else "ttx-server-tracking"
+
+try:
+    # Try to create/get experiment with specified artifact location
+    experiment = mlflow.get_experiment_by_name(EXPERIMENT_NAME)
+    if experiment is None:
+        experiment_id = mlflow.create_experiment(
+            EXPERIMENT_NAME,
+            artifact_location=f"file://{ARTIFACT_ROOT}"
+        )
+        logger.info(f"Created experiment '{EXPERIMENT_NAME}' with artifact root: {ARTIFACT_ROOT}")
+    else:
+        experiment_id = experiment.experiment_id
+        logger.info(f"Using existing experiment '{EXPERIMENT_NAME}' (ID: {experiment_id}, artifact_root: {experiment.artifact_location})")
+    mlflow.set_experiment(EXPERIMENT_NAME)
+except Exception as e:
+    logger.warning(f"Could not set custom artifact location: {e}. Using default.")
+    mlflow.set_experiment(EXPERIMENT_NAME)
 
 # Optional: Enable DSPy autologging (can be controlled via env var)
 ENABLE_MLFLOW_AUTOLOG = os.getenv("ENABLE_MLFLOW_AUTOLOG", "false").lower() == "true"
